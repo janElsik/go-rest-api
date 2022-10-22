@@ -9,6 +9,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo/readpref"
 	"log"
+	"os"
 	"strconv"
 )
 
@@ -19,13 +20,24 @@ type customer struct {
 	Age       int    `bson:"age,omitempty"`
 }
 
-const uri = "mongodb://127.0.0.1:27017"
-const database = "pub"
-const collectionPrimary = "pub_customers"
+var Uri = os.Getenv("MONGO_URI")
+var Database = os.Getenv("MONGO_DB_NAME")
+var CollectionPrimary = os.Getenv("PRIMARY_COLLECTION")
 
 func main() {
 
-	client, err := mongo.Connect(context.TODO(), options.Client().ApplyURI(uri))
+	if Uri == "" {
+		Uri = "mongodb://127.0.0.1:27017"
+	}
+	if Database == "" {
+		Database = "pub"
+	}
+
+	if CollectionPrimary == "" {
+		CollectionPrimary = "pub_customers"
+	}
+
+	client, err := mongo.Connect(context.TODO(), options.Client().ApplyURI(Uri))
 	if err != nil {
 		panic(err)
 	}
@@ -42,7 +54,7 @@ func main() {
 	}
 	fmt.Println("[MONGODB] Successfully connected and pinged.")
 
-	// start gofiber
+	// start go-fiber
 	app := fiber.New()
 
 	// POST method, can be called with curl, such as
@@ -83,11 +95,11 @@ func main() {
 		return c.SendString("customer is named: " + customer.FirstName)
 	})
 
-	log.Fatal(app.Listen(":3000"))
+	log.Fatal(app.Listen(":8080"))
 
 }
 func insertCustomer(client mongo.Client, customer customer) {
-	coll := client.Database(database).Collection(collectionPrimary)
+	coll := client.Database(Database).Collection(CollectionPrimary)
 
 	// first step is to check if customer exists, in order to not duplicate inserts to database
 	_, err := getCustomer(client, customer.Id)
@@ -104,12 +116,15 @@ func insertCustomer(client mongo.Client, customer customer) {
 				fmt.Printf("Inserted document with _id: %v\n", result.InsertedID)
 			}
 		}
+	} else {
+		fmt.Printf("customer with %s already exists! Please enter new valid personal id. \n", customer.Id)
+
 	}
 
 }
 
 func getCustomer(client mongo.Client, id string) (customer, error) {
-	coll := client.Database(database).Collection(collectionPrimary)
+	coll := client.Database(Database).Collection(CollectionPrimary)
 	var result customer
 	err := coll.FindOne(context.TODO(), bson.D{{"_id", id}}).Decode(&result)
 	if err != nil {
