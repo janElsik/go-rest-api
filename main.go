@@ -3,12 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/gin-gonic/gin"
+	"github.com/gofiber/fiber/v2"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo/readpref"
-	"net/http"
+	"log"
+	"strconv"
 )
 
 type customer struct {
@@ -35,69 +36,88 @@ func main() {
 		}
 	}()
 
-	// Ping the primary
+	// Ping the database
 	if err := client.Ping(context.TODO(), readpref.Primary()); err != nil {
 		panic(err)
 	}
 	fmt.Println("[MONGODB] Successfully connected and pinged.")
-	fmt.Println("first findOne:")
 
-	//print getted document
-	//documentRaw, err := getCustomer(*client, "10")
-	//document, err := json.MarshalIndent(documentRaw, "", "   ")
-	//fmt.Printf("%s\n", document)
+	// start gofiber
+	app := fiber.New()
 
-	router := gin.Default()
+	// POST method, can be called with curl, such as
+	// curl -X POST http://localhost:3000/visitPub?id=3458&firstName=Jane&lastName=Doe&age=15
+	app.Post("/visitPub", func(c *fiber.Ctx) error {
+		newCustomer := new(customer)
 
-	router.POST("/visitPub", postCustomer)
-	router.Run("localhost:8080")
+		newCustomer.Id = c.Query("id")
+		newCustomer.FirstName = c.Query("firstName")
+		newCustomer.LastName = c.Query("lastName")
+		newCustomer.Age, err = strconv.Atoi(c.Query("age"))
+
+		if err != nil {
+			fmt.Println("error whilst converting age from string to Int!, setting customer age to 1", err)
+			newCustomer.Age = 1
+		}
+
+		insertCustomer(*client, *newCustomer)
+		return c.SendString("hello " + newCustomer.FirstName)
+	})
+
+	// GET method, can be called with curl, such as
+	// curl -X GET 'http://localhost:3000/getCustomer?id=109403948483'
+	app.Get("/getCustomer", func(c *fiber.Ctx) error {
+		existingCustomerIdRaw := c.Query("id")
+
+		customer, err := getCustomer(*client, existingCustomerIdRaw)
+
+		if err != nil {
+			fmt.Printf("couldn't find customer with id %s!", customer.Id)
+		}
+
+		fmt.Printf("id: %s \n", customer.Id)
+		fmt.Printf("first name: %s \n", customer.FirstName)
+		fmt.Printf("last name: %s \n", customer.LastName)
+		fmt.Printf("age: %d \n", customer.Age)
+
+		return c.SendString("customer is named: " + customer.FirstName)
+	})
+
+	log.Fatal(app.Listen(":3000"))
 
 }
 func insertCustomer(client mongo.Client, customer customer) {
 	coll := client.Database(database).Collection(collectionPrimary)
 
-	foundCustomer, _ := getCustomer(client, customer.Id)
+	// first step is to check if customer exists, in order to not duplicate inserts to database
+	_, err := getCustomer(client, customer.Id)
 
-	if foundCustomer == nil {
-		fmt.Printf("inserting: id: %s, first name: %s, last name: %s, age: %d\n", customer.Id, customer.FirstName, customer.LastName, customer.Age)
-		result, err := coll.InsertOne(context.TODO(), customer)
-		if err != nil {
-			fmt.Println("error occured!", err)
+	if err != nil {
+		// ErrNoDocuments is good here since it explicitly tells us that the document doesn't exist
+		if err == mongo.ErrNoDocuments {
+			fmt.Printf("inserting: id: %s, first name: %s, last name: %s, age: %d\n", customer.Id, customer.FirstName, customer.LastName, customer.Age)
+			result, err := coll.InsertOne(context.TODO(), customer)
+			if err != nil {
+				fmt.Println("error with inserting customer!", err)
+
+			} else {
+				fmt.Printf("Inserted document with _id: %v\n", result.InsertedID)
+			}
 		}
-		fmt.Printf("Inserted document with _id: %v\n", result.InsertedID)
-
-	} else {
-		fmt.Printf("customer with id %s already exists!", customer.Id)
-
 	}
 
 }
 
-func getCustomer(client mongo.Client, id string) (bson.M, error) {
+func getCustomer(client mongo.Client, id string) (customer, error) {
 	coll := client.Database(database).Collection(collectionPrimary)
-	var result bson.M
+	var result customer
 	err := coll.FindOne(context.TODO(), bson.D{{"_id", id}}).Decode(&result)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			fmt.Printf("mongo doc with id [%s] not found!", id)
-			return nil, err
+			return result, err
 		}
 		fmt.Println("unexpected error! \n", err)
 	}
 	return result, err
-}
-
-func postCustomer(c *gin.Context) {
-	var newCustomer customer
-
-	// Call BindJSON to bind the received JSON to
-	// newAlbum.
-	if err := c.BindJSON(&newCustomer); err != nil {
-		return
-	}
-
-	// Add the new album to the slice.
-
-	c.IndentedJSON(http.StatusCreated, newCustomer)
-	fmt.Println(newCustomer.Id)
 }
